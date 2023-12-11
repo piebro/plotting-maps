@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Plotting OSM Maps</title>
+    <meta name="viewport" content="width=800">
+    <meta name="description" content="Online tool to make maps to print them on with a pen plotter.">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script defer data-domain="piebro.github.io/plotting-maps" src="https://plausible.io/js/script.js"></script>
+    <style>
+    img, svg {
+        display: block;
+        max-width: 92vw;
+        max-height: 78vh;
+        width: auto;
+        height: auto;
+        margin: auto;
+        user-select: none;
+    }
+
+    #map-container {
+        padding-top: 10px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+    }
+
+    #button-container {
+        text-align: center;
+        float: center;   
+    }
+
+    .btn {
+        background-color: #04AA6D;
+        color: white;
+        padding: 16px;
+        font-size: 16px;
+        border: none;
+        cursor: pointer;
+    }
+
+    .btn:hover{
+        background-color: #3e8e41;
+    }
+
+    .input-field {
+        width: 60px;
+        padding: 8px;
+        margin: 5px;
+    }
+
+    .checkbox-container {
+        white-space: nowrap;
+        display: inline-block;
+    }
+
+    #vertical-line, #horizontal-line {
+        position: fixed;
+        background-color: black;
+    }
+
+    #vertical-line {
+        top: 0;
+        bottom: 0;
+        left: 50%;
+        width: 1px;
+    }
+
+    #horizontal-line {
+        left: 0;
+        right: 0;
+        top: 50%;
+        height: 1px;
+    }
+    </style>
+</head>
+
+<script>
+let originalStrokeWidth = 0.5;
+let currentOSMData = undefined;
+
+let currentZoom = d3.zoomIdentity;
+let currentDrag = { x: 0, y: 0 };
+
+let saveFileName = 'map';
+
+const latLonToUTMConverter = proj4('EPSG:4326', 'EPSG:3857');
+
+function fromLatLonToUTM(lat, lon) {
+    return latLonToUTMConverter.forward([parseFloat(lon), parseFloat(lat)]);
+}
+
+function getNodesIds(nodeIdToXY, way) {
+    let nodeIds = [];
+    way.querySelectorAll('nd').forEach((nd) => {
+        const nodeId = nd.getAttribute('ref');
+        nodeIds.push(nodeId);
+        nodeIdToXY[nodeId] = {};
+    });
+    return nodeIds;
+}
+
+function addMultipolygonBuildingRelations(wayToNodeIDs, nodeIdToXY, xmlDoc) {
+    xmlDoc.querySelectorAll('relation').forEach((relation) => {
+        let tags = Array.from(relation.querySelectorAll('tag')).reduce((acc, tag) => {
+            acc[tag.getAttribute('k')] = tag.getAttribute('v');
+            return acc;
+        }, {});
+
+        if (tags['building'] && tags['type'] === 'multipolygon') {
+            relation.querySelectorAll('member').forEach((member) => {
+                wayToNodeIDs[member.getAttribute('ref')] = [];
+            });
+        }
+    });
+
+    xmlDoc.querySelectorAll('way').forEach((way) => {
+        const wayId = way.getAttribute('id');
+        if (wayId in wayToNodeIDs) {
+            wayToNodeIDs[wayId] = getNodesIds(nodeIdToXY, way);
+        }
+    });
+}
+
+function processOSMData(osmData) {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(osmData, 'text/xml');
+
+    const svgWidthInMM = parseFloat(document.getElementById('svgWidthInput').value);
+    const svgHeightInMM = parseFloat(document.getElementById('svgHeightInput').value);
+
+    const bounds = xmlDoc.querySelector('bounds');
+    const minXY = fromLatLonToUTM(bounds.getAttribute('minlat'), bounds.getAttribute('minlon'));
+    const maxXY = fromLatLonToUTM(bounds.getAttribute('maxlat'), bounds.getAttribute('maxlon'));
+    const nodeCenterX = (minXY[0] + maxXY[0]) / 2;
+    const nodeCenterY = (minXY[1] + maxXY[1]) / 2;
+
+    const scaleX = svgWidthInMM / (maxXY[0] - minXY[0]);
+    const scaleY = svgHeightInMM / (maxXY[1] - minXY[1]);
+    const scale = (Math.min(scaleX, scaleY) / 2) * 0.98;
+
+    const bboxWidth = 100;
+    const bboxHeight = 100;
+
+    const showBuilding = document.getElementById('buildingCheckbox').checked;
+    const showHighway = document.getElementById('highwayCheckbox').checked;
+    const showRailway = document.getElementById('railwayCheckbox').checked;
+    const showLanduse = document.getElementById('landuseCheckbox').checked;
+    const showNatural = document.getElementById('naturalCheckbox').checked;
+
+    let wayToNodeIDs = {};
+    let nodeIdToXY = {};
+    if (showBuilding) {
+        addMultipolygonBuildingRelations(wayToNodeIDs, nodeIdToXY, xmlDoc);
+    }
+
+    xmlDoc.querySelectorAll('way').forEach((way) => {
+        for (const tag of way.querySelectorAll('tag')) {
+            const key = tag.getAttribute('k');
+            const wayId = way.getAttribute('id');
+            if (showBuilding && key === 'building') {
+                wayToNodeIDs[wayId] = getNodesIds(nodeIdToXY, way);
+                break;
+            } else if (showHighway && key === 'highway') {
+                wayToNodeIDs[wayId] = getNodesIds(nodeIdToXY, way);
+                break;
+            } else if (showRailway && key === 'railway') {
+                wayToNodeIDs[wayId] = getNodesIds(nodeIdToXY, way);
+                break;
+            } else if (showLanduse && key === 'landuse') {
+                wayToNodeIDs[wayId] = getNodesIds(nodeIdToXY, way);
+                break;
+            } else if (showNatural && key === 'natural') {
+                wayToNodeIDs[wayId] = getNodesIds(nodeIdToXY, way);
+                break;
+            }
+        }
+    });
+
+    xmlDoc.querySelectorAll('node').forEach((node) => {
+        const nodeId = node.getAttribute('id');
+        if (nodeId in nodeIdToXY) {
+            const [x, y] = fromLatLonToUTM(node.getAttribute('lat'), node.getAttribute('lon'));
+            nodeIdToXY[nodeId]['x'] = (x - nodeCenterX) * scale + bboxWidth / 2;
+            nodeIdToXY[nodeId]['y'] = -((y - nodeCenterY) * scale) + bboxHeight / 2;
+        }
+    });
+
+    let svgString = `<svg baseProfile="tiny" height="${
+        svgHeightInMM * 10
+    }mm" version="1.2" viewBox="0 0 ${bboxWidth} ${bboxHeight}" width="${
+        svgWidthInMM * 10
+    }mm" xmlns="http://www.w3.org/2000/svg">`;
+
+    svgString += `<rect x="-10000" y="-10000" width="20000" height="20000" fill="rgb(220,220,220)"/>`;
+
+    svgString += `<g id="zoom-group"><g id="drag-group">`;
+    svgString += `<g fill="none" stroke="#555555" stroke-linecap="round" stroke-linejoin="round" class="zoomable-line">`;
+
+    for (const nodeIds of Object.values(wayToNodeIDs)) {
+        const pathStr = nodeIds
+            .map((nodeId) => `${nodeIdToXY[nodeId].x.toFixed(2)} ${nodeIdToXY[nodeId].y.toFixed(2)}`)
+            .join(' L ');
+        svgString += `<path d="M ${pathStr}" />`;
+    }
+
+    svgString += '</g></g></g></svg>';
+    return svgString;
+}
+
+function updateSVG() {
+    const svgContainer = d3.select('#map-container');
+    svgContainer.html(processOSMData(currentOSMData));
+
+    const svg = svgContainer.select('svg');
+    const zoomGroup = svg.select('#zoom-group');
+    const dragGroup = zoomGroup.select('#drag-group');
+
+    const zoom = d3.zoom().on('zoom', function (event) {
+        currentZoom = event.transform;
+        applyTransformations();
+        svg.selectAll('.zoomable-line').style('stroke-width', function () {
+            return parseFloat(document.getElementById('svgStrokeWidth').value) / 25 / currentZoom.k;
+        });
+    });
+    svg.call(zoom).call(zoom.transform, d3.zoomIdentity.translate(currentZoom.x, currentZoom.y).scale(currentZoom.k));
+
+    const drag = d3.drag().on('drag', function (event) {
+        currentDrag.x += event.dx;
+        currentDrag.y += event.dy;
+        applyTransformations();
+    });
+    dragGroup.call(drag);
+
+    function applyTransformations() {
+        zoomGroup.attr('transform', currentZoom);
+        dragGroup.attr('transform', `translate(${currentDrag.x}, ${currentDrag.y})`);
+    }
+
+    applyTransformations();
+    updateCenterLines();
+}
+
+function updateCenterLines() {
+    const svgElement = d3.select('svg').node();
+    if (svgElement) {
+        const svgRect = svgElement.getBoundingClientRect();
+        const centerX = svgRect.left + svgRect.width / 2;
+        const centerY = svgRect.top + svgRect.height / 2;
+
+        const verticalLine = document.getElementById('vertical-line');
+        verticalLine.style.position = 'fixed';
+        verticalLine.style.left = `${centerX}px`;
+
+        const horizontalLine = document.getElementById('horizontal-line');
+        horizontalLine.style.position = 'fixed';
+        horizontalLine.style.top = `${centerY}px`;
+    }
+}
+
+function toggleCrossLines() {
+    const isChecked = document.getElementById('showCrossCheckbox').checked;
+    const displayStyle = isChecked ? 'block' : 'none';
+    document.getElementById('vertical-line').style.display = displayStyle;
+    document.getElementById('horizontal-line').style.display = displayStyle;
+}
+
+function handleFileUpload() {
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            currentOSMData = e.target.result;
+            currentZoom = d3.zoomIdentity;
+            currentDrag = { x: 0, y: 0 };
+            updateSVG();
+        };
+        saveFileName = file.name.slice(0, -4);
+        reader.readAsText(file);
+    }
+    plausible('Button', { props: { Button: 'Upload OSM Export' } });
+}
+
+function downloadSVG() {
+    const svgEl = document.querySelector('svg');
+    if (!svgEl) {
+        console.log('SVG not found');
+        return;
+    }
+
+    const svgWidthInMM = parseFloat(document.getElementById('svgWidthInput').value);
+    const svgHeightInMM = parseFloat(document.getElementById('svgHeightInput').value);
+
+    const serializer = new XMLSerializer();
+    let svgString = serializer.serializeToString(svgEl);
+    svgString = svgString.replace(`width="${svgWidthInMM * 10}mm"`, `width="${svgWidthInMM}mm"`);
+    svgString = svgString.replace(`height="${svgHeightInMM * 10}mm"`, `height="${svgHeightInMM}mm"`);
+    const blob = new Blob([svgString], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+
+    const downloadLink = document.createElement('a');
+    downloadLink.href = url;
+    downloadLink.download = saveFileName + '.svg';
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    plausible('Button', { props: { Button: 'Download Map' } });
+}
+
+window.onload = async function () {
+    window.plausible =
+        window.plausible ||
+        function () {
+            (window.plausible.q = window.plausible.q || []).push(arguments);
+        };
+    
+    await fetch('map.osm')
+        .then((response) => response.text())
+        .then((osmData) => (currentOSMData = osmData))
+        .catch((error) => console.error('Error loading OSM data:', error));
+
+    updateSVG();
+    window.addEventListener('resize', function (event) {
+        updateCenterLines();
+    });
+};
+
+</script>
+
+<body>
+    
+    <div id="button-container">
+        <h1>Tool to Plot OpenStreetMap Exports with a Pen Plotter</h1>
+        
+        <input type="file" id="fileInput" style="display: none;" onchange="handleFileUpload()">
+        <button class="btn" id="uploadButton" onclick="document.getElementById('fileInput').click();">Upload OSM Export</button>
+        <button class="btn" id="downloadButton" onclick="downloadSVG()">Download Map</button>
+        <button class="btn" id="infoBtn" onclick="location.href='https://github.com/piebro/plotting-osm-maps#readme';">Infos</button>
+    </div>
+    
+
+    <div id="map-container"></div>
+    <div id="vertical-line" style="display: none;"></div>
+    <div id="horizontal-line" style="display: none;"></div>
+    <br>
+    <div id="button-container">
+
+    <div class="checkbox-container">
+        <label for="svgWidthInput">Width (mm):</label>
+        <input type="number" id="svgWidthInput" class="input-field" value=300 onchange="updateSVG()">
+    </div>
+    
+    <div class="checkbox-container">
+        <label for="svgHeightInput">Height (mm):</label>
+        <input type="number" id="svgHeightInput" class="input-field" value=200 onchange="updateSVG()">
+    </div>
+    
+    <div class="checkbox-container">
+        <label for="svgStrokeWidth">Stroke Width:</label>
+        <input type="number" id="svgStrokeWidth" class="input-field" value=10 onchange="updateSVG()">
+    </div>
+
+    <div class="checkbox-container">
+        <input type="checkbox" id="buildingCheckbox" checked onchange="updateSVG()">
+        <label for="buildingCheckbox">Building</label>
+    </div>
+
+    <div class="checkbox-container">
+        <input type="checkbox" id="highwayCheckbox" checked onchange="updateSVG()">
+        <label for="highwayCheckbox">Way</label>
+    </div>
+
+    <div class="checkbox-container">
+        <input type="checkbox" id="railwayCheckbox" checked onchange="updateSVG()">
+        <label for="railwayCheckbox">Railway</label>
+    </div>
+
+    <div class="checkbox-container">
+        <input type="checkbox" id="landuseCheckbox" onchange="updateSVG()">
+        <label for="landuseCheckbox">Landuse</label>
+    </div>
+
+    <div class="checkbox-container">
+        <input type="checkbox" id="naturalCheckbox" onchange="updateSVG()">
+        <label for="naturalCheckbox">Natural</label>
+    </div>
+    
+    <div class="checkbox-container">
+        <input type="checkbox" id="showCrossCheckbox" onchange="toggleCrossLines()">
+        <label for="showCrossCheckbox">Show cross</label>
+    </div>
+
+    </div>
+    
+</body>
+</html>
