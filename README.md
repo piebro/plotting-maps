@@ -49,7 +49,7 @@ Plotting a map on an A3 piece of paper.
 
 ![Image of a plotter plotting a map](images/plotting_image.png)
 
-A similar, cool project with a different UX and output is: https://github.com/anvaka/city-roads/.
+A similar, cool project with a different UX and output is: https://github.com/anvaka/city-roads/ and another project to visualize maps in a custom way (also for plotters) is: https://github.com/marceloprates/prettymaps
 
 ## Contributing
 
