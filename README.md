@@ -49,6 +49,8 @@ Plotting a map on an A3 piece of paper.
 
 ![Image of a plotter plotting a map](images/plotting_image.png)
 
+If you want to plot the map on mulitple piece of papers, you can use the `map_to_grid.sh` script.
+
 A similar, cool project with a different UX and output is: https://github.com/anvaka/city-roads/ and another project to visualize maps in a custom way (also for plotters) is: https://github.com/marceloprates/prettymaps
 
 ## Contributing
